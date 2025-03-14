@@ -1,99 +1,95 @@
-# RAG-powered telegram bot for real estate agency conversations
-![How a generative model imagines the project](./BotPic.jpg)
-***<p align=center>Figure 1. How a generative model imagines the project</p>***
+# RAG система для агенства недвижимости
 
-The project is aimed at automating daily conversations with clients concerning frequently asked questions about the rules of residence, booking, real estate and selection of suitable properties for a user. It was necessary to perform different types of search depending on dialogue states and set different prompts, so two types of retrievers were used. The **Retrieval-Augmented Generation (RAG) chains** act as a bridge, integrating **vector databases** and a **generative language model** to offer contextually aware responses to user inquiries.
+Ассистент автоматизирует общение с клиентами по вопросам правил проживания в агентстве, бронирования недвижимости и подбора объектов. Ключевой момент — вопросы могут быть **недетерминированными**: поиск по массиву корпоративных текстов создает релевантный контекст для генеративной модели, а нерелевантные для целей бота запросы GigaChat обрабатывает на основе внутренних знаний. **Извлечение предпочтений** реализовано через интерактивное меню (aiogram-dialog) с последовательностью вопросов и множественным выбором. **Стоимость объекта** рассчитывается на основе данных: количество человек, суток бронирования и т.д. Также предусмотрены юмористические ответы на отправленные стикеры и фотографии
 
-## Functions the project could offer
-### Context-Sensitive Text Generation
-The system can generate personalized and contextually relevant text about a specific company. It can provide detailed information, highlight unique features, and tailor the content to the user's interests and previous interactions.
+## Детерминированный логика обработки запросов
 
-### Voice Message Recognition and Response
-The system can accurately interpret and respond to voice messages. Users can ask questions, make requests, or provide feedback through voice commands, and the system will generate appropriate responses.
+**Middlewares** обеспечивают обработку и **маршрутизацию запросов**. В проекте они широко используются для **транскрибирования** голосовых сообщений и перехвата конкретных типов запросов, важных с точки зрения бизнеса: намерение получить фотографию объекта недвижимости или поделиться номером телефона. Дополнительно Middleware позволяет **фиксировать данные о пользователях** (имя, user_id, session_id) при первом взаимодействии. При обновлении данных (например, выбор адреса или номера телефона в trigger.py) middleware передает их в обработчики, которые обновляют таблицу session_store и в случае желания пользователя связаться отправляют уведомления администраторам с актуальной информацией
 
-### Real Estate Photo Sharing
-Upon request, either text or voice, the system can send photos of real estate objects.
+Общая схема перехвата запросов для дальнейшей маршрутизации:
 
-### Cost Estimation Based on Guest Characteristics
-By analyzing property attributes, the system can estimate the cost of a real estate object. It takes into account factors like the number of guests, age to provide an accurate cost estimate.
+[![pipeline-middleware.jpg](https://i.postimg.cc/SQttsvBs/pipeline-middleware.jpg)](https://postimg.cc/jCPh3Zd0)
 
-### User Message and Preference Storage
-All messages exchanged between users and the system, along with user preferences and service choices, are stored in a secure database. This data is used to personalize future interactions, send notifications to administrators and offer a seamless user experience across multiple sessions.
 
-### Joke Imitation and Sticker/Photo Response
-To add a touch of humor and engagement, the system can respond to stickers and photos sent by users with witty jokes or humorous comments. 
+## Outer Middleware
 
-## A breakdown of the project components and their functionalities
-### Langchains
-#### Conversational RAG Chain for General Questions
-This langchain utilizes the similarity search retriever to handle a wide range of user inquiries. It aims to provide accurate and contextually relevant responses to general questions about residence rules, booking processes, and real estate.
-#### Conversational RAG Chain for Metadata Search
-The system collects the required details to guide users through the process of determining the cost of a property. Here, the self-query retriever is integrated to find all metadata for an object and present the final cost. 
-#### Conversational RAG Chain for Description Search
-This langchain, equipped with the self-query retriever, assists users in obtaining descriptions of properties. It retrieves and presents detailed information, ensuring users have a clear understanding of the property's attributes.
+Принимает запрос (текст, голос или callback), транскрибирует голосовые сообщения и сохраняет базовые данные о пользователе
+- **VoiceTranscriptionMiddleware**: Speech-to-Text, передает в data["text"].
+- **CallbackOuterMiddleware**: Обрабатывает callback-запросы из Aiogram-dialog, извлекает session_id
 
-### Other technologies used
-#### Aiogram-dialog 
-A library to create an interactive menu where users answer a series of questions to provide preferences in services. The answers are used to create a prompt, ensuring the prompt to be well-structured and tailored to a company's needs. Specifically, a prompt behind the interface allows langchains to form a structured request and answer a user's question about the rental price, depending on the information provided in the interactive menu, and also to find a short description of an object. Descriptions are generated automatically based on the metadata provided in a csv table.
+Организует хранение данных для нового пользователя (user_id, full_name, session_id) в session_store (таблица PostgreSQL) **при первом же взаимодействии** с ботом
 
-#### PostgreSQL
-PostgreSQL is used to store message histories to take into account previous messages unique to each user, enabling the dialogue system to engage in more natural conversations with users. The database additionally stores information about users, specifically, their full names, mobile phones (if provided) and also preferences in services they provide while engaging in the interactive menu (trigger.py). Tables named "message store" and "user store" are connected to each other primarily by session_id unique for each chat.
+## Filters
 
-#### Qdrant Vector Store
-Qdrant is used to create a vector store for metadata search. It allows a conversational chain to request additional information for each object about the price depended on the number of guests, as well as an apartment's detailed description.
+Фильтры анализируют запрос, определяют намерение пользователя получить фотографию объекта недвижимости по определенному адресу или сохраняют извлеченные номера телефонов
 
-#### Chroma Vector Store
-Chroma is used to split documents and create chunks. It is also used to create a vector store for any stuff information.
+- **KeywordFilter**: Определяет ключевые слова для перехвата запросов (например, "покажи фото по адресу X").
+- **HasPhoneNumberFilter**: Извлекает номера телефонов и передает их в trigger.py для сохранения.
+- **TrueFilter**: Пропускает все остальные сообщения для обработки по умолчанию
 
-## Project structure
-While Figure 2 visually represents my project’s structure, the subsequent section offer a detailed explanation of this one
+
+## Inner Middleware
+
+- **TriggerEventMiddleware**: Логирует события для отладки
+- **CallbackMiddleware**: Передает callback-события в обработчики
+- **AdminMiddleware**: Проверяет права администратора для доступа к admin.py
+
+## Handler
+
+Ядро системы, где запросы преобразуются в ответы с использованием RAG-цепочек и сохраненных данных
+
+- **chat.py**: RAG для общих вопросов (правила, бронирование).
+- **trigger.py**: Управляет детерминированными диалогами, сохраняет предпочтения (адрес, гости)
+- **voice_processing.py**: Фото и ответы на голосовые запросы.
+
+## Типы handlers: маршрутизация
+
 ```
-/home/user/
-  ├── app/
-  │   ├── context_vault/
-  │   │   └── context_vault.py # Text data required for bot's replies and chains' operation (.gitignore)
-  │   ├── filters/
-  │   │   └── filters.py # To catch media files requests
-  │   ├── handlers/
-  │   │   ├── admin.py # Administrator access to the contents of user database.
-  │   │   ├── chat.py # Manages chat-related operations: any text when filters return False, along with stiсkers and photos.
-  │   │   ├── trigger.py # Processes trigger events.
-  │   │   └── voice_processing.py # Handles any voice message processing.
-  │   ├── middlewares/
-  │   │   ├── inner.py
-  │   │   └── outer.py
-  │   ├── modules/
-  │   │   └── chain_definition.py # Specifies the RAG chains.
-  │   ├── utils/
-  │   │   └── utils.py
-  │   ├── docker-compose.yml
-  │   ├── Dockerfile
-  │   ├── main.py
-  │   └── requirements.txt
-  └── hidden/
-      ├── proxy/
-      │   └── nginx.conf
-      └── data/
-          ├── csv-items/
-          │   └── metadata.csv
-          ├── txt-docs/
-          │   ├── doc1.txt
-          │   └── doc2.txt
-          ├── media/
-          │   ├── city/
-          │   ├── address-1/
-          │   ├── address-2/
-          │   ├── address-3/
-          │   └── address-4/
-          │   ...
-          └── chroma-vectors/
-              └── vector_stores/
-                  └── db_rules/
-                      ├── chroma.sqlite3
-                      └── 80a586f9-3867-473d-85b0-be4e1177c2df
-```
-***<p align=center>Figure 2. Local project tree</p>***
-The project's core functionality resides within an "app" directory. The filters are designed to detect and record the presence of specific key phrases within any text-based input to send photos when required, whether it is a transcribed message or a regular text message. This is achieved by transcription occurring before applying filters while passing an outer middleware. By transcribing the messages first, the filters can effectively identify and capture the desired keywords or phrases to catch an intent and trigger specified handlers. Specifically, handlers for sending photos.
+Общие вопросы → chat.py (langchain pipeline)
+Стоимость/описание → trigger.py
+Фото/медиа → trigger.py / voice_processing.py
 
-Meanwhile, the "**hidden**" directory serves as a local storage for sensitive data mounted to the main directory, including media files categorized by location and vector creation materials. 
-The **vector stores** themselves are also located within this directory both for simple similarity search and self-query techniques.
+```
+
+# RAG pipeline
+
+Поиск и извлечение:
+- Chroma: Косинусное сходство для общих вопросов (правила проживания) из фрагментов текста
+- Qdrant: Self-query для структурированных запросов (стоимость, описание) из метаданных недвижимости (metadata.csv)
+
+Генерация ответа:
+- RAG-цепочки (chain_definition.py):
+    - conversational_rag_chain: Общие вопросы **с историей сообщений** из PostgreSQL.
+    - conversational_rag_chain_for_metadata_search: Стоимость **в зависимости от указанных в меню данных**.
+    - conversational_rag_chain_for_description_search: Поиск по описаниям объектов и их метаданным.
+- LLM: GigaChat генерирует ответы на основе извлеченного контекста. **Контекст диалога** учитывается с помощью адаптера **PostgresSaver** и **MessagesPlaceholder** (LangChain)
+
+[![RAG-pipeline-real-estate.jpg](https://i.postimg.cc/Pq2Lm9np/RAG-pipeline-real-estate.jpg)](https://postimg.cc/Z9vKmfR4)
+
+# Хранение данных о пользователях
+
+Таблицы PostgreSQL
+- message_store: История сообщений (текст, session_id) для долгосрочного контекста.
+- session_store: Данные пользователей (имя, телефон, предпочтения, session_id).
+
+Память
+- PostgresChatMessageHistory: Извлекает историю из message_store для общих вопросов и описаний.
+
+Интеграция: Middleware передает session_id, связывающий данные и историю для RAG-цепочек.
+
+### Установка
+```
+git clone https://github.com/pinohanako/RAG-powered-bot-for-real-estate.git
+cd RAG-powered-bot-for-real-estate
+pip install -r requirements.txt
+```
+
+### Использование
+
+Настройте **.env** с токенами (Telegram, GigaChat, Qdrant, PostgreSQL).
+
+Запустите бота:
+```
+python app/main.py
+```
+Взаимодействуйте через Telegram: задавайте вопросы, используйте меню для подбора объектов.
